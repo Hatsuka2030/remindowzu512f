@@ -102,11 +102,11 @@ header{flex-shrink:0;height:var(--header-h);background:var(--surface);border-bot
 .review-prog-wrap{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden}
 .review-prog-bar{height:100%;background:var(--accent);border-radius:3px;transition:width .4s ease}
 .review-counter{font-size:12px;color:var(--text3);white-space:nowrap;font-weight:600}
-.review-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 16px;gap:20px;overflow:hidden}
+.review-body{flex:1;display:flex;flex-direction:column;align-items:center;padding:20px 16px;gap:20px;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .flip-wrap{width:100%;max-width:420px;perspective:1000px}
-.flip-card{width:100%;min-height:260px;position:relative;transform-style:preserve-3d;transition:transform .5s cubic-bezier(.4,.2,.2,1);cursor:pointer}
+.flip-card{width:100%;position:relative;transform-style:preserve-3d;transition:transform .5s cubic-bezier(.4,.2,.2,1);cursor:pointer}
 .flip-card.flipped{transform:rotateY(180deg)}
-.flip-front,.flip-back{position:absolute;inset:0;min-height:260px;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:var(--radius);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 24px;text-align:center;box-shadow:var(--shadow-lg);border:1px solid var(--border)}
+.flip-front,.flip-back{position:absolute;top:0;left:0;right:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:var(--radius);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:28px 24px;text-align:center;box-shadow:var(--shadow-lg);border:1px solid var(--border)}
 .flip-front{background:var(--surface)}
 .flip-back{background:var(--accent-light);transform:rotateY(180deg)}
 .flip-label{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--text3);text-transform:uppercase;margin-bottom:14px}
@@ -521,6 +521,8 @@ async function renderItemImages(el,keys){
     if(dataUrl){const img=document.createElement('img');img.className='flip-img';img.src=dataUrl;wrap.appendChild(img);}
   }
   el.appendChild(wrap);
+  // 画像追加後に高さを再計算
+  requestAnimationFrame(()=>syncFlipCardHeight());
 }
 
 // UNDO
@@ -904,8 +906,8 @@ function renderReviewCard(){
 
   document.getElementById('review-body-area').innerHTML=
     '<div class="flip-wrap"><div class="flip-card" id="flip-card" onclick="flipCard()">'+
-    '<div class="flip-front"><div class="flip-label">おぼえてる？</div><div class="flip-content">'+esc(item.front)+'</div><div id="review-img-front"></div>'+(item.tag?'<div style="margin-top:10px">'+tagBadgesHTML(item.tag)+'</div>':'')+'<div class="flip-hint">👆 タップして答えを確認</div></div>'+
-    '<div class="flip-back"><div class="flip-label">こたえ</div><div class="flip-content">'+(item.back?esc(item.back):esc(item.front))+'</div><div id="review-img-back"></div>'+stageBarHTML(item)+'</div>'+
+    '<div class="flip-front" id="flip-front-el"><div class="flip-label">おぼえてる？</div><div class="flip-content">'+esc(item.front)+'</div><div id="review-img-front"></div>'+(item.tag?'<div style="margin-top:10px">'+tagBadgesHTML(item.tag)+'</div>':'')+'<div class="flip-hint">👆 タップして答えを確認</div></div>'+
+    '<div class="flip-back" id="flip-back-el"><div class="flip-label">こたえ</div><div class="flip-content">'+(item.back?esc(item.back):esc(item.front))+'</div><div id="review-img-back"></div>'+stageBarHTML(item)+'</div>'+
     '</div></div>'+
     '<div class="review-actions">'+
     '<div id="answer-btns" style="display:flex;flex-direction:column;gap:6px">'+
@@ -925,6 +927,9 @@ function renderReviewCard(){
     '<button class="btn-back-to-q" id="btn-back-q" style="display:none" onclick="unflipCard()">↩ 問題に戻る</button>'+
     '</div>';
 
+  // 表裏どちらか高い方に合わせてカード高さをセット（フリップ対応）
+  requestAnimationFrame(()=>syncFlipCardHeight());
+
   // Load images asynchronously
   if(item.img_front&&item.img_front.length){
     const el=document.getElementById('review-img-front');
@@ -933,6 +938,32 @@ function renderReviewCard(){
   if(item.img_back&&item.img_back.length){
     const el=document.getElementById('review-img-back');
     if(el)renderItemImages(el,item.img_back);
+  }
+}
+// position:absolute の表裏から高さを測り flip-card に反映する
+function syncFlipCardHeight(){
+  const card=document.getElementById('flip-card');
+  const front=document.getElementById('flip-front-el');
+  const back=document.getElementById('flip-back-el');
+  if(!card||!front||!back)return;
+  // 一時的に両方を可視状態にして高さを取得
+  const origBackVis=back.style.visibility;
+  back.style.visibility='hidden';
+  back.style.transform='rotateY(0deg)'; // 一時的に回転をキャンセルして測定
+  const frontH=front.scrollHeight;
+  const backH=back.scrollHeight;
+  back.style.transform='rotateY(180deg)';
+  back.style.visibility=origBackVis;
+  const minH=260;
+  const cardH=Math.max(minH,frontH,backH);
+  card.style.height=cardH+'px';
+  // review-body がスクロール不要な場合は中央寄せ、必要な場合はtop寄せ
+  const body=document.getElementById('review-body-area');
+  if(body){
+    const bodyH=body.clientHeight;
+    const actionsH=body.querySelector('.review-actions')?.offsetHeight||0;
+    const totalH=cardH+actionsH+20; // gap分
+    body.style.justifyContent=totalH<=bodyH?'center':'flex-start';
   }
 }
 function flipCard(){
