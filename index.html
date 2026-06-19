@@ -423,7 +423,11 @@ let fmodalSource='today';
 
 let items=JSON.parse(localStorage.getItem('remindo_items')||'[]');
 let editingId=null,reviewQueue=[],reviewAgainQueue=[],reviewIdx=0,reviewFlipped=false,reviewTotalOriginal=0;
+let subReviewMode=false,subReviewQueue=[],subReviewIdx=0,subReviewAgainQueue=[];
+let reviewAnsweredCount=0; // 通常復習で10問ごとに再復習を起動するカウンター
+let subReviewPendingMainQueue=[],subReviewPendingMainIdx=0,subReviewPendingTotalOriginal=0,subReviewPendingAgainQueue=[];
 const againCount={}; // {itemId: consecutive again count in this session}
+const hardCount={};  // {itemId: hard count in this session}
 let reviewHistory=[]; // [{itemSnapshot, idx, againQueue, againCountSnapshot, streakSnapshot}]
 let reviewSource='today'; // which tab started this review session
 const selMode={tab:null,ids:new Set()}; // selection mode state
@@ -860,6 +864,10 @@ function startReview(source,selSet){
   Object.keys(againCount).forEach(k=>delete againCount[k]);
   reviewHistory=[];
   reviewSource=source;
+  reviewAnsweredCount=0;
+  Object.keys(hardCount).forEach(k=>delete hardCount[k]);
+  subReviewMode=false;subReviewQueue=[];subReviewIdx=0;subReviewAgainQueue=[];
+  subReviewPendingMainQueue=[];subReviewPendingMainIdx=0;subReviewPendingTotalOriginal=0;subReviewPendingAgainQueue=[];
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('page-review').classList.add('active');
@@ -1057,10 +1065,36 @@ function answerReview(choice){
       item.completed=result.completed;
       item.lastReviewed=todayStr();
       againCount[item.id]=0;
+      if(choice==='hard'){hardCount[item.id]=(hardCount[item.id]||0)+1;}
+      else{hardCount[item.id]=0;}
       if(choice==='good'||choice==='easy'){streak[item.id]=(streak[item.id]||0)+1;}
       else{streak[item.id]=0;}
       saveStreak();
       save();
+    }
+  }
+  // 再復習モード中でなければカウント＆10問チェック
+  if(!subReviewMode && choice!=='skip'){
+    reviewAnsweredCount++;
+    if(reviewAnsweredCount%10===0){
+      // 直前10問の中でagain/hardだったものを収集
+      const last10Ids=reviewQueue.slice(Math.max(0,reviewIdx-9),reviewIdx+1);
+      const targetsForSub=last10Ids.filter(id=>(againCount[id]||0)>0||(hardCount[id]||0)>0);
+      // again/hardが1件以上あれば再復習モードへ移行
+      if(targetsForSub.length>0){
+        // 現在のメイン復習状態を退避
+        subReviewPendingMainQueue=[...reviewQueue];
+        subReviewPendingMainIdx=reviewIdx+1;
+        subReviewPendingTotalOriginal=reviewTotalOriginal;
+        subReviewPendingAgainQueue=[...reviewAgainQueue];
+        // 再復習開始
+        subReviewMode=true;
+        subReviewQueue=[...targetsForSub];
+        subReviewAgainQueue=[];
+        subReviewIdx=0;
+        renderSubReviewCard();
+        return;
+      }
     }
   }
   reviewIdx++;
@@ -1094,7 +1128,28 @@ function undoReview(){
   renderReviewCard();
 }
 function renderReviewComplete(total){
-  // セッション終了時：againQueueに残っているアイテムにnextReviewをセット
+  // セッション終了時：最後の再復習を起動（10の倍数でない残り分も対象）
+  if(!subReviewMode){
+    // 最後のラウンド（直前の再復習起動後から今まで）のagain/hardを収集
+    const startIdx=reviewAnsweredCount%10===0?Math.max(0,reviewIdx-10):Math.max(0,reviewIdx-(reviewAnsweredCount%10));
+    const lastChunkIds=reviewQueue.slice(startIdx,reviewIdx);
+    const targetsForSub=lastChunkIds.filter(id=>(againCount[id]||0)>0||(hardCount[id]||0)>0);
+    if(targetsForSub.length>0){
+      // まず againQueue を処理してからメイン完了に戻る
+      subReviewPendingMainQueue=[];
+      subReviewPendingMainIdx=reviewIdx;
+      subReviewPendingTotalOriginal=total;
+      subReviewPendingAgainQueue=[...reviewAgainQueue];
+      reviewAgainQueue=[];
+      subReviewMode=true;
+      subReviewQueue=[...targetsForSub];
+      subReviewAgainQueue=[];
+      subReviewIdx=0;
+      renderSubReviewCard();
+      return;
+    }
+  }
+  // againQueueに残っているアイテムにnextReviewをセット
   reviewAgainQueue.forEach(id=>{
     const item=items.find(i=>i.id===id);
     if(item){
@@ -1127,6 +1182,75 @@ function endReview(){
   const navId='nav-'+(reviewSource||'today');
   const tabId=reviewSource||'today';
   showPage(tabId,document.getElementById(navId));
+}
+// ===== 再復習機能 =====
+function renderSubReviewCard(){
+  // 再復習キューが全て正解済みになったら終了
+  if(subReviewIdx>=subReviewQueue.length){
+    if(subReviewAgainQueue.length>0){
+      // もう一度キューがある → 最初から再挑戦
+      subReviewQueue=[...subReviewAgainQueue];
+      subReviewAgainQueue=[];
+      subReviewIdx=0;
+    } else {
+      // 再復習完了 → メイン復習に戻る
+      subReviewMode=false;
+      reviewQueue=[...subReviewPendingMainQueue];
+      reviewIdx=subReviewPendingMainIdx;
+      reviewTotalOriginal=subReviewPendingTotalOriginal;
+      reviewAgainQueue=[...subReviewPendingAgainQueue];
+      subReviewPendingMainQueue=[];
+      subReviewPendingAgainQueue=[];
+      renderReviewCard();
+      return;
+    }
+  }
+  const itemId=subReviewQueue[subReviewIdx];
+  const item=items.find(i=>i.id===itemId);
+  if(!item){subReviewIdx++;renderSubReviewCard();return;}
+
+  const total=subReviewQueue.length;
+  const progress=subReviewIdx;
+  const pct=total>0?(progress/total*100):0;
+  document.getElementById('review-prog').style.width=pct+'%';
+  document.getElementById('review-counter').textContent='再復習 '+(progress+1)+' / '+total;
+  reviewFlipped=false;
+
+  document.getElementById('review-body-area').innerHTML=
+    '<div style="text-align:center;padding:6px 0;margin-bottom:4px"><span style="background:#f4a261;color:#fff;border-radius:8px;padding:3px 12px;font-size:13px;font-weight:bold">🔁 再復習タイム</span></div>'+
+    '<div class="flip-wrap"><div class="flip-card" id="flip-card" onclick="flipCard()">'+
+    '<div class="flip-front" id="flip-front-el"><div class="flip-label">もう一度確認！</div><div class="flip-content">'+esc(item.front)+'</div><div id="review-img-front"></div>'+(item.tag?'<div style="margin-top:10px">'+tagBadgesHTML(item.tag)+'</div>':'')+'<div class="flip-hint">👆 タップして答えを確認</div></div>'+
+    '<div class="flip-back" id="flip-back-el"><div class="flip-label">こたえ</div><div class="flip-content">'+(item.back?esc(item.back):esc(item.front))+'</div><div id="review-img-back"></div>'+stageBarHTML(item)+'</div>'+
+    '</div></div>'+
+    '<div class="review-actions">'+
+    '<div id="answer-btns" style="display:flex;flex-direction:column;gap:6px">'+
+      '<div class="answer-row">'+
+        '<button class="ans-btn ans-again" onclick="answerSubReview(\'again\')"><span class="ans-label">😰 もう一度</span><span class="ans-period">再挑戦</span></button>'+
+        '<button class="ans-btn ans-good" onclick="answerSubReview(\'good\')"><span class="ans-label">✅ 正解</span><span class="ans-period">次へ</span></button>'+
+      '</div>'+
+    '</div>'+
+    '<button class="btn-back-to-q" id="btn-back-q" style="display:none" onclick="unflipCard()">↩ 問題に戻る</button>'+
+    '</div>';
+
+  requestAnimationFrame(()=>syncFlipCardHeight());
+  if(item.img_front&&item.img_front.length){
+    const el=document.getElementById('review-img-front');
+    if(el)renderItemImages(el,item.img_front);
+  }
+  if(item.img_back&&item.img_back.length){
+    const el=document.getElementById('review-img-back');
+    if(el)renderItemImages(el,item.img_back);
+  }
+}
+
+function answerSubReview(choice){
+  const id=subReviewQueue[subReviewIdx];
+  if(choice==='again'){
+    subReviewAgainQueue.push(id);
+  }
+  // 'good' は何もしない（消えるだけ）
+  subReviewIdx++;
+  renderSubReviewCard();
 }
 
 // LEARNING
