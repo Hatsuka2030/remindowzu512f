@@ -40,6 +40,17 @@ header{flex-shrink:0;height:var(--header-h);background:var(--surface);border-bot
 .btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}
 .btn-full{width:100%;padding:14px;font-size:15px;border-radius:var(--radius)}
 .btn-icon{background:var(--surface2);border:1px solid var(--border);color:var(--text2);width:36px;height:36px;border-radius:10px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.subreview-settings{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow)}
+.subreview-settings-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.subreview-settings-label{font-size:13px;font-weight:700;color:var(--text1)}
+.subreview-settings-sub{font-size:11px;color:var(--text2);margin-top:2px}
+.toggle-btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:20px;border:none;font-size:12px;font-weight:700;cursor:pointer;font-family:'Noto Sans JP',sans-serif;transition:background .2s,color .2s}
+.toggle-btn.on{background:var(--accent);color:#fff}
+.toggle-btn.off{background:var(--surface2);color:var(--text2);border:1px solid var(--border)}
+.interval-ctrl{display:flex;align-items:center;gap:6px}
+.interval-ctrl button{width:28px;height:28px;border-radius:50%;border:1.5px solid var(--border);background:var(--surface2);color:var(--text1);font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+.interval-ctrl button:active{background:var(--accent-light)}
+.interval-val{font-size:14px;font-weight:700;color:var(--text1);min-width:32px;text-align:center}
 .today-banner{background:linear-gradient(135deg,var(--accent) 0%,#1b4332 100%);color:#fff;border-radius:var(--radius);padding:20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between}
 .today-banner h3{font-family:'DM Serif Display',serif;font-size:18px;margin-bottom:3px}
 .today-banner p{font-size:12px;opacity:.8;margin-bottom:10px}
@@ -423,8 +434,10 @@ let fmodalSource='today';
 
 let items=JSON.parse(localStorage.getItem('remindo_items')||'[]');
 let editingId=null,reviewQueue=[],reviewAgainQueue=[],reviewIdx=0,reviewFlipped=false,reviewTotalOriginal=0;
+let subReviewEnabled=JSON.parse(localStorage.getItem('remindo_subreview_enabled')||'true');
+let subReviewInterval=parseInt(localStorage.getItem('remindo_subreview_interval')||'10',10);
 let subReviewMode=false,subReviewQueue=[],subReviewIdx=0,subReviewAgainQueue=[];
-let reviewAnsweredCount=0; // 通常復習で10問ごとに再復習を起動するカウンター
+let reviewAnsweredCount=0; // 通常復習で再復習を起動するカウンター
 let subReviewPendingMainQueue=[],subReviewPendingMainIdx=0,subReviewPendingTotalOriginal=0,subReviewPendingAgainQueue=[];
 const againCount={}; // {itemId: consecutive again count in this session}
 const hardCount={};  // {itemId: hard count in this session}
@@ -724,6 +737,58 @@ function updateBadges(){
 }
 
 // TODAY
+function renderSubReviewSettingsHTML(){
+  const onCls=subReviewEnabled?'toggle-btn on':'toggle-btn off';
+  const onLabel=subReviewEnabled?'🔁 ON':'⏸ OFF';
+  return '<div class="subreview-settings">'+
+    '<div class="subreview-settings-row">'+
+      '<div>'+
+        '<div class="subreview-settings-label">再復習機能</div>'+
+        '<div class="subreview-settings-sub">'+
+          (subReviewEnabled?subReviewInterval+'問ごとに再復習':'再復習なしで通常進行')+
+        '</div>'+
+      '</div>'+
+      '<div style="display:flex;align-items:center;gap:10px">'+
+        (subReviewEnabled?
+          '<div class="interval-ctrl">'+
+            '<button onclick="changeSubReviewInterval(-1)" title="減らす">−</button>'+
+            '<span class="interval-val">'+subReviewInterval+'</span>'+
+            '<button onclick="changeSubReviewInterval(1)" title="増やす">＋</button>'+
+          '</div>':'')+
+        '<button class="'+onCls+'" onclick="toggleSubReview()">'+onLabel+'</button>'+
+      '</div>'+
+    '</div>'+
+  '</div>';
+}
+function toggleSubReview(){
+  subReviewEnabled=!subReviewEnabled;
+  localStorage.setItem('remindo_subreview_enabled',JSON.stringify(subReviewEnabled));
+  // バナーエリアを再描画（renderToday全体は重いので設定部のみ更新）
+  const area=document.getElementById('today-banner-area');
+  if(area){
+    const existing=area.querySelector('.subreview-settings');
+    const newEl=document.createElement('div');
+    newEl.innerHTML=renderSubReviewSettingsHTML();
+    const newSettings=newEl.firstElementChild;
+    if(existing) area.replaceChild(newSettings,existing);
+    else area.appendChild(newSettings);
+  }
+}
+function changeSubReviewInterval(delta){
+  const next=subReviewInterval+delta;
+  if(next<1||next>50)return;
+  subReviewInterval=next;
+  localStorage.setItem('remindo_subreview_interval',String(subReviewInterval));
+  const area=document.getElementById('today-banner-area');
+  if(area){
+    const existing=area.querySelector('.subreview-settings');
+    const newEl=document.createElement('div');
+    newEl.innerHTML=renderSubReviewSettingsHTML();
+    const newSettings=newEl.firstElementChild;
+    if(existing) area.replaceChild(newSettings,existing);
+    else area.appendChild(newSettings);
+  }
+}
 function renderToday(){
   const due=items.filter(isDueToday);
   const bannerEl=document.getElementById('today-banner-area');
@@ -742,7 +807,8 @@ function renderToday(){
     '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
     '<button class="btn-start" onclick="openFModal(\x27today\x27)">🔍 絞り込んで復習</button>'+
     '<button class="btn-start" onclick="startReview(\x27today\x27,filterState.today)">▶ 復習を開始</button>'+
-    '</div></div><div class="today-count">'+due.length+'</div></div>';
+    '</div></div><div class="today-count">'+due.length+'</div></div>'+
+    renderSubReviewSettingsHTML();
   const todayVisIdsFull=applySearch(sortItems(applyFilter(due,sel),sortState.today,'today'),'today').map(i=>i.id);
   ctrlEl.innerHTML=selModeBarHTML('today',todayVisIdsFull,false)+sortBarHTML('today')+catFilterHTML('today',sel,due);
   renderTodayList();
@@ -1076,7 +1142,7 @@ function answerReview(choice){
   // 再復習モード中でなければカウント＆10問チェック
   if(!subReviewMode && choice!=='skip'){
     reviewAnsweredCount++;
-    if(reviewAnsweredCount%10===0){
+    if(subReviewEnabled && reviewAnsweredCount%subReviewInterval===0){
       // 直前10問の中でagain/hardだったものを収集
       const last10Ids=reviewQueue.slice(Math.max(0,reviewIdx-9),reviewIdx+1);
       const targetsForSub=last10Ids.filter(id=>(againCount[id]||0)>0||(hardCount[id]||0)>0);
@@ -1129,7 +1195,7 @@ function undoReview(){
 }
 function renderReviewComplete(total){
   // セッション終了時：最後の再復習を起動（10の倍数でない残り分も対象）
-  if(!subReviewMode){
+  if(!subReviewMode && subReviewEnabled){
     // 最後のラウンド（直前の再復習起動後から今まで）のagain/hardを収集
     const startIdx=reviewAnsweredCount%10===0?Math.max(0,reviewIdx-10):Math.max(0,reviewIdx-(reviewAnsweredCount%10));
     const lastChunkIds=reviewQueue.slice(startIdx,reviewIdx);
