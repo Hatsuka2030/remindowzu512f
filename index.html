@@ -592,6 +592,7 @@ function getStageBadge(item){if(item.completed)return '<span class="badge badge-
 function getNextLabel(item){if(!item.nextReview)return '今日';const diff=-(daysDiff(item.nextReview));if(diff<=0)return '今日';if(diff===1)return '明日';return diff+'日後';}
 function stageBarHTML(item){const s=item.stage||0;return '<div class="stage-bar">'+STAGES.map((_,i)=>'<div class="stage-pip'+(i<s?' done':'')+'"></div>').join('')+'<span style="font-size:10px;color:var(--text3);margin-left:4px">'+s+'/10</span></div>';}
 function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function escNL(s){return esc(s).replace(/\n/g,'<br>');}
 function allTags(){
   const s=new Set();
   items.forEach(i=>{if(i.tag)i.tag.split(',').map(t=>t.trim()).filter(Boolean).forEach(t=>s.add(t));});
@@ -857,7 +858,7 @@ function itemCardHTML(item,tab){
   if(inSel){
     return '<div class="item-card'+(isSel?' selected':'')+'" onclick="toggleSel(\''+item.id+'\')">'+
       '<div class="sel-check">'+(isSel?'✓':'')+'</div>'+
-      '<div class="item-body"><div class="item-front">'+esc(item.front)+'</div>'+(item.back?'<div class="item-back">'+esc(item.back)+'</div>':'')+'<div class="item-meta">'+metaBadges+'</div></div>'+
+      '<div class="item-body"><div class="item-front">'+escNL(item.front)+'</div>'+(item.back?'<div class="item-back">'+escNL(item.back)+'</div>':'')+'<div class="item-meta">'+metaBadges+'</div></div>'+
       '</div>';
   }
   const diffBtns='<div class="card-diff-row">'+
@@ -870,10 +871,10 @@ function itemCardHTML(item,tab){
   const frontId='front-'+item.id;
   const isLong=(item.front||'').length>40;
   const frontHTML=isLong
-    ?'<div id="'+frontId+'" class="item-front item-front-collapsed">'+esc(item.front)+'</div>'+
+    ?'<div id="'+frontId+'" class="item-front item-front-collapsed">'+escNL(item.front)+'</div>'+
       '<button class="item-more-btn" id="more-'+item.id+'" onclick="toggleFrontExpand(\''+frontId+'\',\'more-'+item.id+'\',event)">もっと見る ▼</button>'
-    :'<div class="item-front">'+esc(item.front)+'</div>';
-  return '<div class="item-card item-card-flip" onclick="toggleCardFlip(\''+flipId+'\',event)"><div class="item-icon">'+getIcon(item)+'</div><div class="item-body">'+frontHTML+(item.back?'<div id="'+flipId+'" class="item-back-expanded" style="display:none">'+esc(item.back)+'</div>':'')+'<div class="item-meta">'+metaBadges+'</div>'+diffBtns+'</div><div class="item-actions" onclick="event.stopPropagation()"><button class="btn-icon" onclick="openEditModal(\''+item.id+'\')">✏️</button><button class="btn-icon" onclick="deleteItem(\''+item.id+'\')">🗑️</button></div></div>';
+    :'<div class="item-front">'+escNL(item.front)+'</div>';
+  return '<div class="item-card item-card-flip" onclick="toggleCardFlip(\''+flipId+'\',event)"><div class="item-icon">'+getIcon(item)+'</div><div class="item-body">'+frontHTML+(item.back?'<div id="'+flipId+'" class="item-back-expanded" style="display:none">'+escNL(item.back)+'</div>':'')+'<div class="item-meta">'+metaBadges+'</div>'+diffBtns+'</div><div class="item-actions" onclick="event.stopPropagation()"><button class="btn-icon" onclick="openEditModal(\''+item.id+'\')">✏️</button><button class="btn-icon" onclick="deleteItem(\''+item.id+'\')">🗑️</button></div></div>';
 }
 
 function toggleFrontExpand(frontId,btnId,event){
@@ -980,8 +981,8 @@ function renderReviewCard(){
 
   document.getElementById('review-body-area').innerHTML=
     '<div class="flip-wrap"><div class="flip-card" id="flip-card" onclick="flipCard()">'+
-    '<div class="flip-front" id="flip-front-el"><div class="flip-label">おぼえてる？</div><div class="flip-content">'+esc(item.front)+'</div><div id="review-img-front"></div>'+(item.tag?'<div style="margin-top:10px">'+tagBadgesHTML(item.tag)+'</div>':'')+'<div class="flip-hint">👆 タップして答えを確認</div></div>'+
-    '<div class="flip-back" id="flip-back-el"><div class="flip-label">こたえ</div><div class="flip-content">'+(item.back?esc(item.back):esc(item.front))+'</div><div id="review-img-back"></div>'+stageBarHTML(item)+'</div>'+
+    '<div class="flip-front" id="flip-front-el"><div class="flip-label">おぼえてる？</div><div class="flip-content" style="white-space:pre-wrap">'+escNL(item.front)+'</div><div id="review-img-front"></div>'+(item.tag?'<div style="margin-top:10px">'+tagBadgesHTML(item.tag)+'</div>':'')+'<div class="flip-hint">👆 タップして答えを確認</div></div>'+
+    '<div class="flip-back" id="flip-back-el"><div class="flip-label">こたえ</div><div class="flip-content" style="white-space:pre-wrap">'+(item.back?escNL(item.back):escNL(item.front))+'</div><div id="review-img-back"></div>'+stageBarHTML(item)+'</div>'+
     '</div></div>'+
     '<div class="review-actions">'+
     '<div id="answer-btns" style="display:flex;flex-direction:column;gap:6px">'+
@@ -1285,8 +1286,8 @@ function renderSubReviewCard(){
   document.getElementById('review-body-area').innerHTML=
     '<div style="text-align:center;padding:6px 0;margin-bottom:4px"><span style="background:#f4a261;color:#fff;border-radius:8px;padding:3px 12px;font-size:13px;font-weight:bold">🔁 再復習タイム</span></div>'+
     '<div class="flip-wrap"><div class="flip-card" id="flip-card" onclick="flipCard()">'+
-    '<div class="flip-front" id="flip-front-el"><div class="flip-label">もう一度確認！</div><div class="flip-content">'+esc(item.front)+'</div><div id="review-img-front"></div>'+(item.tag?'<div style="margin-top:10px">'+tagBadgesHTML(item.tag)+'</div>':'')+'<div class="flip-hint">👆 タップして答えを確認</div></div>'+
-    '<div class="flip-back" id="flip-back-el"><div class="flip-label">こたえ</div><div class="flip-content">'+(item.back?esc(item.back):esc(item.front))+'</div><div id="review-img-back"></div>'+stageBarHTML(item)+'</div>'+
+    '<div class="flip-front" id="flip-front-el"><div class="flip-label">もう一度確認！</div><div class="flip-content" style="white-space:pre-wrap">'+escNL(item.front)+'</div><div id="review-img-front"></div>'+(item.tag?'<div style="margin-top:10px">'+tagBadgesHTML(item.tag)+'</div>':'')+'<div class="flip-hint">👆 タップして答えを確認</div></div>'+
+    '<div class="flip-back" id="flip-back-el"><div class="flip-label">こたえ</div><div class="flip-content" style="white-space:pre-wrap">'+(item.back?escNL(item.back):escNL(item.front))+'</div><div id="review-img-back"></div>'+stageBarHTML(item)+'</div>'+
     '</div></div>'+
     '<div class="review-actions">'+
     '<div id="answer-btns" style="display:flex;flex-direction:column;gap:6px">'+
@@ -1350,9 +1351,9 @@ function renderLearningList(){
   el.innerHTML='<div class="item-list">'+searchedLearning.map(item=>{
     if(selMode.tab==='learning'){
       const isSel=selMode.ids.has(item.id);
-      return '<div class="item-card'+(isSel?' selected':'')+'" onclick="toggleSel(\x27'+item.id+'\x27)"><div class="sel-check">'+(isSel?'✓':'')+'</div><div class="item-body"><div class="item-front">'+esc(item.front)+'</div>'+(item.back?'<div class="item-back">'+esc(item.back)+'</div>':'')+'<div class="item-meta">'+getStageBadge(item)+'<span class="badge badge-orange">⏰ '+getNextLabel(item)+'</span>'+tagBadgesHTML(item.tag)+'</div>'+stageBarHTML(item)+'</div></div>';
+      return '<div class="item-card'+(isSel?' selected':'')+'" onclick="toggleSel(\x27'+item.id+'\x27)"><div class="sel-check">'+(isSel?'✓':'')+'</div><div class="item-body"><div class="item-front">'+escNL(item.front)+'</div>'+(item.back?'<div class="item-back">'+escNL(item.back)+'</div>':'')+'<div class="item-meta">'+getStageBadge(item)+'<span class="badge badge-orange">⏰ '+getNextLabel(item)+'</span>'+tagBadgesHTML(item.tag)+'</div>'+stageBarHTML(item)+'</div></div>';
     }
-    return '<div class="item-card"><div class="item-icon">'+getIcon(item)+'</div><div class="item-body"><div class="item-front">'+esc(item.front)+'</div>'+(item.back?'<div class="item-back">'+esc(item.back)+'</div>':'')+'<div class="item-meta">'+getStageBadge(item)+'<span class="badge badge-orange">⏰ '+getNextLabel(item)+'</span>'+tagBadgesHTML(item.tag)+'</div>'+stageBarHTML(item)+'</div><div class="item-actions"><button class="btn-today" onclick="returnToToday(\x27'+item.id+'\x27)">📅 今日</button><button class="btn-complete" onclick="markComplete(\x27'+item.id+'\x27)">✅ 完了</button><button class="btn-icon" onclick="openEditModal(\x27'+item.id+'\x27)">✏️</button><button class="btn-icon" onclick="deleteItem(\x27'+item.id+'\x27)">🗑️</button></div></div>';
+    return '<div class="item-card"><div class="item-icon">'+getIcon(item)+'</div><div class="item-body"><div class="item-front">'+escNL(item.front)+'</div>'+(item.back?'<div class="item-back">'+escNL(item.back)+'</div>':'')+'<div class="item-meta">'+getStageBadge(item)+'<span class="badge badge-orange">⏰ '+getNextLabel(item)+'</span>'+tagBadgesHTML(item.tag)+'</div>'+stageBarHTML(item)+'</div><div class="item-actions"><button class="btn-today" onclick="returnToToday(\x27'+item.id+'\x27)">📅 今日</button><button class="btn-complete" onclick="markComplete(\x27'+item.id+'\x27)">✅ 完了</button><button class="btn-icon" onclick="openEditModal(\x27'+item.id+'\x27)">✏️</button><button class="btn-icon" onclick="deleteItem(\x27'+item.id+'\x27)">🗑️</button></div></div>';
   }).join('')+'</div>';
 }
 
@@ -1374,8 +1375,8 @@ function renderCompletedList(){
   if(!sorted.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">🏆</div><h3>まだ完了したアイテムがありません</h3><p>全5段階の復習を終えるとここに表示されます。</p></div>';return;}
   const searchedCompleted=applySearch(sorted,'completed');
   el.innerHTML='<div class="item-list">'+searchedCompleted.map(item=>{
-    if(selMode.tab==='completed'){const isSel=selMode.ids.has(item.id);return '<div class="item-card'+(isSel?' selected':'')+'" onclick="toggleSel(\x27'+item.id+'\x27)"><div class="sel-check">'+(isSel?'✓':'')+'</div><div class="item-body"><div class="item-front">'+esc(item.front)+'</div>'+(item.back?'<div class="item-back">'+esc(item.back)+'</div>':'')+'<div class="item-meta"><span class="badge badge-green">✓ 記憶に定着</span>'+tagBadgesHTML(item.tag)+'</div></div></div>';}
-    return '<div class="item-card"><div class="item-icon">'+getIcon(item)+'</div><div class="item-body"><div class="item-front">'+esc(item.front)+'</div>'+(item.back?'<div class="item-back">'+esc(item.back)+'</div>':'')+'<div class="item-meta"><span class="badge badge-green">✓ 記憶に定着</span>'+tagBadgesHTML(item.tag)+'</div></div><div class="item-actions"><button class="btn-icon" onclick="resetItem(\x27'+item.id+'\x27)">🔄</button><button class="btn-icon" onclick="deleteItem(\x27'+item.id+'\x27)">🗑️</button></div></div>';
+    if(selMode.tab==='completed'){const isSel=selMode.ids.has(item.id);return '<div class="item-card'+(isSel?' selected':'')+'" onclick="toggleSel(\x27'+item.id+'\x27)"><div class="sel-check">'+(isSel?'✓':'')+'</div><div class="item-body"><div class="item-front">'+escNL(item.front)+'</div>'+(item.back?'<div class="item-back">'+escNL(item.back)+'</div>':'')+'<div class="item-meta"><span class="badge badge-green">✓ 記憶に定着</span>'+tagBadgesHTML(item.tag)+'</div></div></div>';}
+    return '<div class="item-card"><div class="item-icon">'+getIcon(item)+'</div><div class="item-body"><div class="item-front">'+escNL(item.front)+'</div>'+(item.back?'<div class="item-back">'+escNL(item.back)+'</div>':'')+'<div class="item-meta"><span class="badge badge-green">✓ 記憶に定着</span>'+tagBadgesHTML(item.tag)+'</div></div><div class="item-actions"><button class="btn-icon" onclick="resetItem(\x27'+item.id+'\x27)">🔄</button><button class="btn-icon" onclick="deleteItem(\x27'+item.id+'\x27)">🗑️</button></div></div>';
   }).join('')+'</div>';
 }
 
@@ -1423,8 +1424,8 @@ function renderAllList(){
   if(!searchedAll.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">🔍</div><h3>該当なし</h3><p>検索条件に一致するアイテムがありません。</p></div>';return;}
   if(allStatusFilter==='completed'){
     el.innerHTML='<div class="item-list">'+searchedAll.map(item=>{
-      if(selMode.tab==='all'){const isSel=selMode.ids.has(item.id);return '<div class="item-card'+(isSel?' selected':'')+'" onclick="toggleSel(\x27'+item.id+'\x27)"><div class="sel-check">'+(isSel?'✓':'')+'</div><div class="item-body"><div class="item-front">'+esc(item.front)+'</div>'+(item.back?'<div class="item-back">'+esc(item.back)+'</div>':'')+'<div class="item-meta"><span class="badge badge-green">✓ 記憶に定着</span>'+tagBadgesHTML(item.tag)+'</div></div></div>';}
-      return '<div class="item-card"><div class="item-icon">'+getIcon(item)+'</div><div class="item-body"><div class="item-front">'+esc(item.front)+'</div>'+(item.back?'<div class="item-back">'+esc(item.back)+'</div>':'')+'<div class="item-meta"><span class="badge badge-green">✓ 記憶に定着</span>'+tagBadgesHTML(item.tag)+'</div></div><div class="item-actions"><button class="btn-icon" onclick="resetItem(\x27'+item.id+'\x27)">🔄</button><button class="btn-icon" onclick="openEditModal(\x27'+item.id+'\x27)">✏️</button><button class="btn-icon" onclick="deleteItem(\x27'+item.id+'\x27)">🗑️</button></div></div>';
+      if(selMode.tab==='all'){const isSel=selMode.ids.has(item.id);return '<div class="item-card'+(isSel?' selected':'')+'" onclick="toggleSel(\x27'+item.id+'\x27)"><div class="sel-check">'+(isSel?'✓':'')+'</div><div class="item-body"><div class="item-front">'+escNL(item.front)+'</div>'+(item.back?'<div class="item-back">'+escNL(item.back)+'</div>':'')+'<div class="item-meta"><span class="badge badge-green">✓ 記憶に定着</span>'+tagBadgesHTML(item.tag)+'</div></div></div>';}
+      return '<div class="item-card"><div class="item-icon">'+getIcon(item)+'</div><div class="item-body"><div class="item-front">'+escNL(item.front)+'</div>'+(item.back?'<div class="item-back">'+escNL(item.back)+'</div>':'')+'<div class="item-meta"><span class="badge badge-green">✓ 記憶に定着</span>'+tagBadgesHTML(item.tag)+'</div></div><div class="item-actions"><button class="btn-icon" onclick="resetItem(\x27'+item.id+'\x27)">🔄</button><button class="btn-icon" onclick="openEditModal(\x27'+item.id+'\x27)">✏️</button><button class="btn-icon" onclick="deleteItem(\x27'+item.id+'\x27)">🗑️</button></div></div>';
     }).join('')+'</div>';
     return;
   }
@@ -1610,11 +1611,11 @@ function parseCSVText(text,forceFullCSV){
     // Full CSV: 表,裏,カテゴリ,段階,次回復習日,最終復習日,追加日,完了
     return dataLines.map(line=>{
       const cols=parseCSVLine(line).map(c=>c.replace(/^"|"$/g,''));
-      const front=(cols[0]||'').trim();
+      const front=(cols[0]||'').trim().replace(/<br>/gi,'\n');
       if(!front)return null;
       return{
         front,
-        back:(cols[1]||'').trim(),
+        back:(cols[1]||'').trim().replace(/<br>/gi,'\n'),
         tag:(cols[2]||'').trim(),
         stage:parseInt(cols[3])||0,
         nextReview:normalizeDateStr((cols[4]||'').trim())||null,
@@ -1628,7 +1629,7 @@ function parseCSVText(text,forceFullCSV){
   // Simple CSV: 表,裏
   return dataLines.map(line=>{
     const cols=parseCSVLine(line).map(c=>c.replace(/^"|"$/g,''));
-    return{front:(cols[0]||'').trim(),back:(cols[1]||'').trim()};
+    return{front:(cols[0]||'').trim().replace(/<br>/gi,'\n'),back:(cols[1]||'').trim().replace(/<br>/gi,'\n')};
   }).filter(r=>r.front.length>0);
 }
 function loadCSVFile(event){
@@ -1665,8 +1666,8 @@ function renderImportPreview(parsed){
         '</div>';
     }
     return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;">'+
-      '<div style="font-weight:700;font-size:13px">'+esc(r.front)+'</div>'+
-      (r.back?'<div style="font-size:12px;color:var(--text2);margin-top:2px">'+esc(r.back)+'</div>':'<div style="font-size:11px;color:var(--text3);margin-top:2px">（裏なし）</div>')+
+      '<div style="font-weight:700;font-size:13px;white-space:pre-wrap">'+escNL(r.front)+'</div>'+
+      (r.back?'<div style="font-size:12px;color:var(--text2);margin-top:2px;white-space:pre-wrap">'+escNL(r.back)+'</div>':'<div style="font-size:11px;color:var(--text3);margin-top:2px">（裏なし）</div>')+
       meta+'</div>';
   }).join('');
   // カテゴリ一括設定は全情報CSVの場合は不要
