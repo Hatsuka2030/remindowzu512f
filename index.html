@@ -1143,8 +1143,8 @@ function answerReview(choice){
   if(!subReviewMode && choice!=='skip'){
     reviewAnsweredCount++;
     if(subReviewEnabled && reviewAnsweredCount%subReviewInterval===0){
-      // 直前10問の中でagain/hardだったものを収集
-      const last10Ids=reviewQueue.slice(Math.max(0,reviewIdx-9),reviewIdx+1);
+      // 直前subReviewInterval問の中でagain/hardだったものを収集
+      const last10Ids=reviewQueue.slice(Math.max(0,reviewIdx-(subReviewInterval-1)),reviewIdx+1);
       const targetsForSub=last10Ids.filter(id=>(againCount[id]||0)>0||(hardCount[id]||0)>0);
       // again/hardが1件以上あれば再復習モードへ移行
       if(targetsForSub.length>0){
@@ -1197,7 +1197,7 @@ function renderReviewComplete(total){
   // セッション終了時：最後の再復習を起動（10の倍数でない残り分も対象）
   if(!subReviewMode && subReviewEnabled){
     // 最後のラウンド（直前の再復習起動後から今まで）のagain/hardを収集
-    const startIdx=reviewAnsweredCount%10===0?Math.max(0,reviewIdx-10):Math.max(0,reviewIdx-(reviewAnsweredCount%10));
+    const startIdx=reviewAnsweredCount%subReviewInterval===0?Math.max(0,reviewIdx-subReviewInterval):Math.max(0,reviewIdx-(reviewAnsweredCount%subReviewInterval));
     const lastChunkIds=reviewQueue.slice(startIdx,reviewIdx);
     const targetsForSub=lastChunkIds.filter(id=>(againCount[id]||0)>0||(hardCount[id]||0)>0);
     if(targetsForSub.length>0){
