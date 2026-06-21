@@ -1124,7 +1124,7 @@ function answerReview(choice){
       againCount[item.id]=ac+1;
       streak[item.id]=0;
       saveStreak();
-      saveItems([item.id],null);
+      save();
     } else {
       const result=calcNextReview(item,choice);
       item.nextReview=result.nextReview;
@@ -1137,7 +1137,7 @@ function answerReview(choice){
       if(choice==='good'||choice==='easy'){streak[item.id]=(streak[item.id]||0)+1;}
       else{streak[item.id]=0;}
       saveStreak();
-      saveItems([item.id],null);
+      save();
     }
   }
   // 再復習モード中でなければカウント＆10問チェック
@@ -1179,7 +1179,7 @@ function undoReview(){
       item.stage=h.itemSnapshot.stage;
       item.completed=h.itemSnapshot.completed;
       item.lastReviewed=h.itemSnapshot.lastReviewed;
-      saveItems([item.id],null);
+      save();
     }
   }
   // キュー・カウンター・ストリークを戻す
@@ -1223,7 +1223,7 @@ function renderReviewComplete(total){
       const streakCount=streak[item.id]||0;
       const min=streakCount>=3?10:25;
       item.nextReview=minutesToDate(min);
-      saveItems([item.id],null);
+      save();
     }
   });
   reviewAgainQueue=[];
@@ -1240,7 +1240,7 @@ function endReview(){
       const streakCount=streak[item.id]||0;
       const min=streakCount>=3?10:25;
       item.nextReview=minutesToDate(min);
-      saveItems([item.id],null);
+      save();
     }
   });
   reviewAgainQueue=[];
@@ -1540,20 +1540,20 @@ async function saveItem(){
     pushUndo('追加を取り消し',[...items]);
     items.unshift({id:Date.now().toString(),front,back,tag,img_front:imgFrontKeys,img_back:imgBackKeys,stage:0,nextReview:null,completed:false,createdAt:new Date().toISOString(),lastReviewed:null});
   }
-  saveItems([items[0].id],null);closeModal();
+  save();closeModal();
   const ap=document.querySelector('.page.active');
   if(ap)renderPage(ap.id.replace('page-',''));
 }
 function deleteItem(id){
   pushUndo('削除を取り消し',[...items]);
-  items=items.filter(i=>i.id!==id);saveItems(null,[id]);
+  items=items.filter(i=>i.id!==id);save();
   const ap=document.querySelector('.page.active');
   if(ap)renderPage(ap.id.replace('page-',''));
 }
 function resetItem(id){
   const item=items.find(i=>i.id===id);if(!item)return;
   pushUndo('完了を取り消し',[...items]);
-  item.stage=0;item.nextReview=null;item.completed=false;saveItems([item.id],null);renderCompleted();
+  item.stage=0;item.nextReview=null;item.completed=false;save();renderCompleted();
 }
 function returnToToday(id){
   const item=items.find(i=>i.id===id);if(!item)return;
@@ -1575,7 +1575,7 @@ function bulkReturnToToday(){
 function markComplete(id){
   const item=items.find(i=>i.id===id);if(!item)return;
   pushUndo('完了に移動',[...items]);
-  item.completed=true;item.stage=STAGES.length;item.nextReview=null;saveItems([item.id],null);renderLearning();
+  item.completed=true;item.stage=STAGES.length;item.nextReview=null;save();renderLearning();
 }
 function bulkComplete(){
   const base=items.filter(i=>!i.completed&&(i.stage||0)>0);
@@ -1730,7 +1730,7 @@ function confirmImport(){
     return {id:(now+i).toString(),front:r.front,back:r.back,tag,img_front:[],img_back:[],stage:0,nextReview:null,completed:false,createdAt:new Date().toISOString(),lastReviewed:null};
   });
   pushUndo('インポートを取り消し（'+newItems.length+'件）',[...items]);
-  items.unshift(...newItems);saveItems(newItems.map(i=>i.id),null);updateBadges();
+  items.unshift(...newItems);save();updateBadges();
   document.getElementById('import-step2').style.display='none';
   document.getElementById('import-step3').style.display='block';
   document.getElementById('import-done-msg').textContent=
@@ -1855,7 +1855,7 @@ function bulkDelete(){
   if(!ids.length)return;
   pushUndo('一括削除（'+ids.length+'件）',[...items]);
   items=items.filter(i=>!ids.includes(i.id));
-  saveItems(null,ids);exitSelMode();
+  save();exitSelMode();
 }
 function bulkCompleteSelected(){
   const ids=[...selMode.ids];
@@ -1998,112 +1998,25 @@ function updateSyncBadge(online) {
   b.className = 'sync-badge ' + (online ? 'online' : 'offline');
 }
 
-// Firestore sync — 1アイテム1ドキュメント方式
-// users/{uid}/items/{item.id} に各アイテムを保存
-
-let _pendingWrites = {}; // {id: item} — debounce用
-let _pendingDeletes = new Set(); // 削除待ちid
-let _writeTimer = null;
-const WRITE_DEBOUNCE = 800; // ms
-
-function itemsColRef(uid) {
-  return db.collection('users').doc(uid).collection('items');
-}
-
+// Firestore sync
 function startFirestoreSync(uid) {
   if (firestoreUnsubscribe) firestoreUnsubscribe();
-
-  const colRef = itemsColRef(uid);
-  const oldDocRef = db.collection('users').doc(uid).collection('data').doc('items');
-
-  // 旧形式・新形式を同時に確認し、適切な方からロード＆移行
-  Promise.all([colRef.limit(1).get(), oldDocRef.get()]).then(([newSnap, oldSnap]) => {
-    const hasNew = !newSnap.empty;
-    const hasOld = oldSnap.exists && oldSnap.data() && (oldSnap.data().items||[]).length > 0;
-
-    if (!hasNew && hasOld) {
-      // 旧形式のみ → 新形式に移行してローカルにも反映
-      const sourceItems = oldSnap.data().items;
-      console.log('旧形式から移行:', sourceItems.length, '件');
-      // ローカルに即反映
-      items = sourceItems;
-      localStorage.setItem('remindo_items', JSON.stringify(items));
-      const ap = document.querySelector('.page.active');
-      if (ap) renderPage(ap.id.replace('page-', ''));
-      updateBadges();
-      // 新形式にbatch書き込み
-      const pushBatches = [];
-      for (let i = 0; i < sourceItems.length; i += 500) {
-        const b = db.batch();
-        sourceItems.slice(i, i+500).forEach(item => {
-          b.set(colRef.doc(String(item.id)), JSON.parse(JSON.stringify(item)));
-        });
-        pushBatches.push(b);
-      }
-      pushBatches.reduce((p,b) => p.then(()=>b.commit()), Promise.resolve())
-        .then(() => { console.log('移行完了'); updateSyncBadge(true); })
-        .catch(e => console.error('移行失敗:', e));
-
-    } else if (!hasNew && !hasOld && items.length > 0) {
-      // Firestoreが完全に空 → ローカルをプッシュ
-      console.log('ローカルデータをプッシュ:', items.length, '件');
-      const pushBatches = [];
-      for (let i = 0; i < items.length; i += 500) {
-        const b = db.batch();
-        items.slice(i, i+500).forEach(item => {
-          b.set(colRef.doc(String(item.id)), JSON.parse(JSON.stringify(item)));
-        });
-        pushBatches.push(b);
-      }
-      pushBatches.reduce((p,b) => p.then(()=>b.commit()), Promise.resolve())
-        .catch(e => console.error('初回push失敗:', e));
+  const docRef = db.collection('users').doc(uid).collection('data').doc('items');
+  // First push local data if Firestore is empty
+  docRef.get().then(snap => {
+    if (!snap.exists && items.length > 0) {
+      // Push local to Firestore
+      docRef.set({ items: JSON.parse(JSON.stringify(items)), updatedAt: Date.now() });
     }
-    // hasNew=true の場合はonSnapshotが全件ロードするので何もしない
   });
-
-  // リアルタイムリッスン（差分のみ受け取る）
-  let _initialSnapshotDone = false;
-  firestoreUnsubscribe = colRef.onSnapshot(snapshot => {
-    if (isSyncing) return;
-    let changed = false;
-
-    if (!_initialSnapshotDone) {
-      // 初回スナップショット: Firestoreの全件をローカルとマージ（ローカル優先ではなくFirestore優先、ただしローカルにしか無いものは保持）
-      _initialSnapshotDone = true;
-      const firestoreItems = [];
-      snapshot.forEach(doc => firestoreItems.push(doc.data()));
-      if (firestoreItems.length > 0) {
-        // Firestoreのアイテムでローカルを更新、ローカルにしかないものは残す
-        firestoreItems.forEach(fsItem => {
-          const idx = items.findIndex(i => String(i.id) === String(fsItem.id));
-          if (idx >= 0) {
-            items[idx] = fsItem;
-          } else {
-            items.push(fsItem);
-          }
-        });
-        changed = true;
-      }
-    } else {
-      // 2回目以降: 差分のみ
-      snapshot.docChanges().forEach(change => {
-        const data = change.doc.data();
-        if (change.type === 'added' || change.type === 'modified') {
-          const idx = items.findIndex(i => String(i.id) === change.doc.id);
-          if (idx >= 0) {
-            items[idx] = data;
-          } else {
-            items.push(data);
-          }
-          changed = true;
-        } else if (change.type === 'removed') {
-          items = items.filter(i => String(i.id) !== change.doc.id);
-          changed = true;
-        }
-      });
-    }
-
-    if (changed) {
+  // Listen for changes
+  firestoreUnsubscribe = docRef.onSnapshot(snap => {
+    if (!snap.exists) return;
+    const data = snap.data();
+    if (!data || !data.items) return;
+    // Only update if Firestore is newer
+    if (!isSyncing) {
+      items = data.items;
       localStorage.setItem('remindo_items', JSON.stringify(items));
       const ap = document.querySelector('.page.active');
       if (ap) renderPage(ap.id.replace('page-', ''));
@@ -2116,51 +2029,21 @@ function startFirestoreSync(uid) {
   });
 }
 
-// 変更されたアイテムのみFirestoreに書き込む（debounce）
-function saveToFirestore(changedIds, deletedIds) {
-  if (!currentUser || !db) return;
-  if (changedIds) changedIds.forEach(id => {
-    const item = items.find(i => String(i.id) === String(id));
-    if (item) _pendingWrites[String(id)] = JSON.parse(JSON.stringify(item));
-  });
-  if (deletedIds) deletedIds.forEach(id => {
-    _pendingDeletes.add(String(id));
-    delete _pendingWrites[String(id)];
-  });
-  clearTimeout(_writeTimer);
-  _writeTimer = setTimeout(() => {
-    const col = itemsColRef(currentUser.uid);
-    const batch = db.batch();
-    let ops = 0;
-    Object.entries(_pendingWrites).forEach(([id, item]) => {
-      batch.set(col.doc(id), item);
-      ops++;
-    });
-    _pendingDeletes.forEach(id => {
-      batch.delete(col.doc(id));
-      ops++;
-    });
-    if (ops === 0) return;
-    isSyncing = true;
-    _pendingWrites = {};
-    _pendingDeletes.clear();
-    batch.commit()
-      .then(() => { isSyncing = false; updateSyncBadge(true); })
-      .catch(e => { console.error('Firestore書き込みエラー:', e); isSyncing = false; });
-  }, WRITE_DEBOUNCE);
+function saveToFirestore() {
+  if (!currentUser) return;
+  isSyncing = true;
+  const docRef = db.collection('users').doc(currentUser.uid).collection('data').doc('items');
+  docRef.set({ items: JSON.parse(JSON.stringify(items)), updatedAt: Date.now() })
+    .then(() => { isSyncing = false; updateSyncBadge(true); })
+    .catch(e => { console.error(e); isSyncing = false; });
 }
 
-// save() — localStorage + Firestore（全アイテム対象）
+// Override save() to also save to Firestore
+const _originalSave = save;
+// Patch: wrap save to also call Firestore
 function save() {
   localStorage.setItem('remindo_items', JSON.stringify(items));
-  // 全アイテムIDを変更対象として渡す（呼び出し側で絞る場合はsaveItems()を使う）
-  if (currentUser) saveToFirestore(items.map(i=>i.id), null);
-}
-
-// 特定アイテムのみ保存（復習回答など頻繁な更新用）
-function saveItems(changedIds, deletedIds) {
-  localStorage.setItem('remindo_items', JSON.stringify(items));
-  if (currentUser) saveToFirestore(changedIds, deletedIds);
+  saveToFirestore();
 }
 
 // Auth modal
