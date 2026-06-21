@@ -2005,6 +2005,7 @@ function updateSyncBadge(online) {
 // 影響を受けるのは「そのカードが属するチャンク1個」だけで済むため、差分書き込みが可能。
 const CHUNK_COUNT = 64; // 固定値（運用中に変更しない。変更すると全カードの所属チャンクが組み替わるため）
 let lastSyncedItems = []; // 直前に同期した時点のitemsスナップショット（差分計算用）
+let lastSyncedAt = 0; // 自分が最後に書き込んだ（または取り込んだ）updatedAt。これより古い通知は無視する。
 
 function hashStr(str) {
   // 撹拌力の強い文字列ハッシュ。Date.now()ベースの連番ID（カード生成時のID形式）でも
@@ -2085,14 +2086,19 @@ function startFirestoreSync(uid) {
 function attachFirestoreListener(uid) {
   const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
   if (firestoreUnsubscribe) firestoreUnsubscribe();
-  firestoreUnsubscribe = metaRef.onSnapshot(snap => {
+  firestoreUnsubscribe = metaRef.onSnapshot({ includeMetadataChanges: true }, snap => {
     if (!snap.exists) { updateSyncBadge(true); return; }
+    // 自分自身の書き込みによる通知（まだサーバー確定前のローカルエコー、
+    // または自分が直前に書いたものと同じ更新時刻）は無視する。
+    if (snap.metadata.hasPendingWrites) { updateSyncBadge(true); return; }
     const meta = snap.data();
-    if (!meta || isSyncing) { updateSyncBadge(true); return; }
-    // 他端末からの更新を取得する（自分が書いた直後の自己エコーは isSyncing でスキップ済み）
+    if (!meta) { updateSyncBadge(true); return; }
+    if (meta.updatedAt && meta.updatedAt <= lastSyncedAt) { updateSyncBadge(true); return; }
+    if (isSyncing) { updateSyncBadge(true); return; }
+    // ここまで来た通知だけが「他端末からの確定済みの更新」とみなせる。
     const chunksCol = db.collection('users').doc(uid).collection('chunks');
     const reads = [];
-    for (let i = 0; i < CHUNK_COUNT; i++) reads.push(chunksCol.doc('chunk_' + i).get());
+    for (let i = 0; i < CHUNK_COUNT; i++) reads.push(chunksCol.doc('chunk_' + i).get({ source: 'server' }));
     Promise.all(reads).then(snaps => {
       let merged = [];
       for (const s of snaps) {
@@ -2101,6 +2107,7 @@ function attachFirestoreListener(uid) {
       items = merged;
       localStorage.setItem('remindo_items', JSON.stringify(items));
       lastSyncedItems = items.slice();
+      lastSyncedAt = meta.updatedAt || Date.now();
       const ap = document.querySelector('.page.active');
       if (ap) renderPage(ap.id.replace('page-', ''));
       updateBadges();
@@ -2121,12 +2128,14 @@ function writeAllChunks(uid, allItems) {
   const groups = groupItemsByChunk(allItems);
   const chunksCol = db.collection('users').doc(uid).collection('chunks');
   const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
+  const writeTime = Date.now();
   const writes = groups.map((chunk, i) => chunksCol.doc('chunk_' + i).set({ items: chunk }));
   return Promise.all(writes).then(() =>
-    metaRef.set({ scheme: 'idhash', chunkCount: CHUNK_COUNT, totalItems: allItems.length, updatedAt: Date.now() })
+    metaRef.set({ scheme: 'idhash', chunkCount: CHUNK_COUNT, totalItems: allItems.length, updatedAt: writeTime })
   ).then(() => {
     isSyncing = false;
     lastSyncedItems = allItems.slice();
+    lastSyncedAt = writeTime;
     updateSyncBadge(true);
   }).catch(err => {
     isSyncing = false;
@@ -2163,13 +2172,15 @@ function saveChangedChunks(uid, prevItems, newItems) {
   const groups = groupItemsByChunk(newItems);
   const chunksCol = db.collection('users').doc(uid).collection('chunks');
   const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
+  const writeTime = Date.now();
   const writes = [...affectedChunks].map(idx => chunksCol.doc('chunk_' + idx).set({ items: groups[idx] }));
 
   return Promise.all(writes).then(() =>
-    metaRef.set({ scheme: 'idhash', chunkCount: CHUNK_COUNT, totalItems: newItems.length, updatedAt: Date.now() }, { merge: true })
+    metaRef.set({ scheme: 'idhash', chunkCount: CHUNK_COUNT, totalItems: newItems.length, updatedAt: writeTime }, { merge: true })
   ).then(() => {
     isSyncing = false;
     lastSyncedItems = newItems.slice();
+    lastSyncedAt = writeTime;
     updateSyncBadge(true);
   }).catch(err => {
     isSyncing = false;
