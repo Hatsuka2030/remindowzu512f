@@ -1999,44 +1999,127 @@ function updateSyncBadge(online) {
   b.className = 'sync-badge ' + (online ? 'online' : 'offline');
 }
 
-// Firestore sync
+// Firestore sync (チャンク分割方式: 1ドキュメント1MB上限を回避するため、
+// カードを CHUNK_SIZE 件ずつに分けて複数ドキュメントに保存する)
+const CHUNK_SIZE = 150;
+
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 function startFirestoreSync(uid) {
   if (firestoreUnsubscribe) firestoreUnsubscribe();
-  const docRef = db.collection('users').doc(uid).collection('data').doc('items');
-  // First push local data if Firestore is empty
-  docRef.get().then(snap => {
-    if (!snap.exists && items.length > 0) {
-      // Push local to Firestore
-      docRef.set({ items: JSON.parse(JSON.stringify(items)), updatedAt: Date.now() });
+  const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
+  const legacyRef = db.collection('users').doc(uid).collection('data').doc('items');
+  const chunksCol = db.collection('users').doc(uid).collection('chunks');
+
+  metaRef.get().then(metaSnap => {
+    if (metaSnap.exists) {
+      // 既にチャンク形式 → 通常どおり購読開始
+      attachFirestoreListener(uid);
+      return;
     }
+    // メタが無い場合: 旧形式(items 1ドキュメント)からの移行、またはローカルからの初回push
+    legacyRef.get().then(legacySnap => {
+      if (legacySnap.exists && legacySnap.data() && Array.isArray(legacySnap.data().items)) {
+        // 旧データが残っている → そのままチャンク化してアップロード（旧ドキュメントは削除せず温存）
+        const legacyItems = legacySnap.data().items;
+        if (items.length === 0 || legacyItems.length >= items.length) {
+          items = legacyItems;
+          localStorage.setItem('remindo_items', JSON.stringify(items));
+        }
+        writeChunks(uid, items).then(() => attachFirestoreListener(uid));
+      } else if (items.length > 0) {
+        // 旧データも無い → ローカルの現在のitemsを初回pushとしてチャンク化
+        writeChunks(uid, items).then(() => attachFirestoreListener(uid));
+      } else {
+        attachFirestoreListener(uid);
+      }
+    }).catch(() => attachFirestoreListener(uid));
+  }).catch(err => {
+    console.error('Firestore meta取得エラー:', err);
+    updateSyncBadge(false);
   });
-  // Listen for changes
-  firestoreUnsubscribe = docRef.onSnapshot(snap => {
-    if (!snap.exists) return;
-    const data = snap.data();
-    if (!data || !data.items) return;
-    // Only update if Firestore is newer
-    if (!isSyncing) {
-      items = data.items;
+}
+
+function attachFirestoreListener(uid) {
+  const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
+  if (firestoreUnsubscribe) firestoreUnsubscribe();
+  firestoreUnsubscribe = metaRef.onSnapshot(snap => {
+    if (!snap.exists) { updateSyncBadge(true); return; }
+    const meta = snap.data();
+    if (!meta || isSyncing) { updateSyncBadge(true); return; }
+    // 自分が書いた直後の自己エコーは isSyncing でスキップ済み。
+    // 他端末からの更新を取得する。
+    const chunkCount = meta.chunkCount || 0;
+    const chunksCol = db.collection('users').doc(uid).collection('chunks');
+    const reads = [];
+    for (let i = 0; i < chunkCount; i++) reads.push(chunksCol.doc('chunk_' + i).get());
+    Promise.all(reads).then(snaps => {
+      let merged = [];
+      for (const s of snaps) {
+        if (s.exists && Array.isArray(s.data().items)) merged = merged.concat(s.data().items);
+      }
+      items = merged;
       localStorage.setItem('remindo_items', JSON.stringify(items));
       const ap = document.querySelector('.page.active');
       if (ap) renderPage(ap.id.replace('page-', ''));
       updateBadges();
-    }
-    updateSyncBadge(true);
+      updateSyncBadge(true);
+    }).catch(err => {
+      console.error('Firestoreチャンク取得エラー:', err);
+      updateSyncBadge(false);
+    });
   }, err => {
     console.error('Firestore error:', err);
     updateSyncBadge(false);
   });
 }
 
+function writeChunks(uid, allItems) {
+  isSyncing = true;
+  const batches = chunkArray(allItems, CHUNK_SIZE);
+  const chunksCol = db.collection('users').doc(uid).collection('chunks');
+  const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
+
+  // まず現在のチャンク数を確認し、不要になった古いチャンク（件数が減った場合）を削除対象にする
+  return metaRef.get().then(metaSnap => {
+    const prevCount = metaSnap.exists ? (metaSnap.data().chunkCount || 0) : 0;
+    const writes = batches.map((chunk, i) =>
+      chunksCol.doc('chunk_' + i).set({ items: chunk })
+    );
+    const deletions = [];
+    for (let i = batches.length; i < prevCount; i++) {
+      deletions.push(chunksCol.doc('chunk_' + i).delete());
+    }
+    return Promise.all([...writes, ...deletions]).then(() =>
+      metaRef.set({ chunkCount: batches.length, totalItems: allItems.length, updatedAt: Date.now() })
+    );
+  }).then(() => {
+    isSyncing = false;
+    updateSyncBadge(true);
+  }).catch(err => {
+    isSyncing = false;
+    console.error('Firestoreチャンク書き込みエラー:', err);
+    updateSyncBadge(false);
+    showSyncError(err);
+    throw err;
+  });
+}
+
 function saveToFirestore() {
   if (!currentUser) return;
-  isSyncing = true;
-  const docRef = db.collection('users').doc(currentUser.uid).collection('data').doc('items');
-  docRef.set({ items: JSON.parse(JSON.stringify(items)), updatedAt: Date.now() })
-    .then(() => { isSyncing = false; updateSyncBadge(true); })
-    .catch(e => { console.error(e); isSyncing = false; });
+  writeChunks(currentUser.uid, items).catch(() => {
+    // エラーは writeChunks 内でログ・表示済み。ローカル保存は既に完了しているのでデータ自体は安全。
+  });
+}
+
+function showSyncError(err) {
+  const b = document.getElementById('sync-badge');
+  if (b) { b.textContent = '⚠ 同期失敗(ローカルのみ保存)'; b.className = 'sync-badge offline'; }
+  console.warn('クラウド同期に失敗しましたが、端末内のデータは保存されています:', err && err.message);
 }
 
 // Override save() to also save to Firestore
