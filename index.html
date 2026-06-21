@@ -1598,6 +1598,7 @@ function parseCSVLine(line){
   return cols;
 }
 function parseCSVText(text,forceFullCSV){
+  text=text.replace(/^﻿/,''); // BOM除去
   const lines=text.split('\n').map(l=>l.trim()).filter(l=>l.length>0);
   if(!lines.length)return[];
   // ヘッダー行で全情報CSV判定
