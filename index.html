@@ -2012,20 +2012,21 @@ function splitIntoChunks(allItems, n) {
 function startFirestoreSync(uid) {
   if (firestoreUnsubscribe) firestoreUnsubscribe();
   const legacyRef = db.collection('users').doc(uid).collection('data').doc('items');
-  const chunksCol = db.collection('users').doc(uid).collection('chunks');
+  const chunksCol = db.collection('users').doc(uid).collection('chunks5');
 
   const chunkRefs = [];
   for (let i = 0; i < CHUNK_COUNT; i++) chunkRefs.push(chunksCol.doc('chunk_' + i));
 
-  // 既存のチャンクがあるか確認
+  // 既存のチャンクがあるか確認（全チャンクが揃って存在する場合のみ「既にこの形式で保存済み」とみなす。
+  // 過去の別方式の残骸が一部だけ存在するケースを誤認しないようにするため）
   Promise.all(chunkRefs.map(r => r.get())).then(snaps => {
-    const anyChunkExists = snaps.some(s => s.exists);
-    if (anyChunkExists) {
-      // 既にチャンク形式 → そのまま購読開始（最新を読み込む）
+    const allChunksExist = snaps.every(s => s.exists);
+    if (allChunksExist) {
+      // 既にこの形式で保存済み → そのまま購読開始（最新を読み込む）
       attachFirestoreListener(uid);
       return;
     }
-    // チャンクが無い場合: 旧形式(items 1ドキュメント)からの移行、または初回push
+    // チャンクが揃っていない場合: 旧形式(items 1ドキュメント)からの移行、または初回push
     legacyRef.get().then(legacySnap => {
       if (legacySnap.exists && legacySnap.data() && Array.isArray(legacySnap.data().items)) {
         const legacyItems = legacySnap.data().items;
@@ -2048,7 +2049,7 @@ function startFirestoreSync(uid) {
 
 function attachFirestoreListener(uid) {
   if (firestoreUnsubscribe) firestoreUnsubscribe();
-  const chunksCol = db.collection('users').doc(uid).collection('chunks');
+  const chunksCol = db.collection('users').doc(uid).collection('chunks5');
   // chunk_0 の更新だけを監視する「代表」とする。書き込みは必ず全チャンク同時に行うため、
   // chunk_0 が更新された＝他チャンクも更新済み、とみなせる。
   firestoreUnsubscribe = chunksCol.doc('chunk_0').onSnapshot(snap => {
@@ -2080,7 +2081,7 @@ function attachFirestoreListener(uid) {
 function writeAllChunks(uid, allItems) {
   isSyncing = true;
   const groups = splitIntoChunks(allItems, CHUNK_COUNT);
-  const chunksCol = db.collection('users').doc(uid).collection('chunks');
+  const chunksCol = db.collection('users').doc(uid).collection('chunks5');
   const writes = groups.map((chunk, i) =>
     chunksCol.doc('chunk_' + i).set({ items: chunk, updatedAt: Date.now() })
   );
