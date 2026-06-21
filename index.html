@@ -1598,7 +1598,6 @@ function parseCSVLine(line){
   return cols;
 }
 function parseCSVText(text,forceFullCSV){
-  text=text.replace(/^﻿/,''); // BOM除去
   const lines=text.split('\n').map(l=>l.trim()).filter(l=>l.length>0);
   if(!lines.length)return[];
   // ヘッダー行で全情報CSV判定
@@ -1741,17 +1740,19 @@ function confirmImport(){
 function exportCSV(){
   if(!items.length){alert('エクスポートするアイテムがありません。');return;}
   const bom='\uFEFF';
-  const rows=[['表','裏','カテゴリ'],...items.map(i=>[i.front,i.back||'',i.tag||''])];
+  const nl2br=s=>(s||'').replace(/\r\n|\r|\n/g,'<br>');
+  const rows=[['表','裏','カテゴリ'],...items.map(i=>[nl2br(i.front),nl2br(i.back),i.tag||''])];
   const csv=bom+rows.map(r=>r.map(c=>'"'+(c||'').replace(/"/g,'""')+'"').join(',')).join('\n');
   downloadFile('remindo_export.csv',csv,'text/csv;charset=utf-8;');
 }
 function exportCSVFull(){
   if(!items.length){alert('エクスポートするアイテムがありません。');return;}
   const bom='\uFEFF';
+  const nl2br=s=>(s||'').replace(/\r\n|\r|\n/g,'<br>');
   const header=['表','裏','カテゴリ','段階','次回復習日','最終復習日','追加日','完了'];
   const rows=[header,...items.map(i=>[
-    i.front||'',
-    i.back||'',
+    nl2br(i.front),
+    nl2br(i.back),
     i.tag||'',
     String(i.stage||0),
     i.nextReview?'\''+i.nextReview:'',
