@@ -1740,19 +1740,17 @@ function confirmImport(){
 function exportCSV(){
   if(!items.length){alert('エクスポートするアイテムがありません。');return;}
   const bom='\uFEFF';
-  const nl2br=s=>(s||'').replace(/\r\n|\r|\n/g,'<br>');
-  const rows=[['表','裏','カテゴリ'],...items.map(i=>[nl2br(i.front),nl2br(i.back),i.tag||''])];
+  const rows=[['表','裏','カテゴリ'],...items.map(i=>[i.front,i.back||'',i.tag||''])];
   const csv=bom+rows.map(r=>r.map(c=>'"'+(c||'').replace(/"/g,'""')+'"').join(',')).join('\n');
   downloadFile('remindo_export.csv',csv,'text/csv;charset=utf-8;');
 }
 function exportCSVFull(){
   if(!items.length){alert('エクスポートするアイテムがありません。');return;}
   const bom='\uFEFF';
-  const nl2br=s=>(s||'').replace(/\r\n|\r|\n/g,'<br>');
   const header=['表','裏','カテゴリ','段階','次回復習日','最終復習日','追加日','完了'];
   const rows=[header,...items.map(i=>[
-    nl2br(i.front),
-    nl2br(i.back),
+    i.front||'',
+    i.back||'',
     i.tag||'',
     String(i.stage||0),
     i.nextReview?'\''+i.nextReview:'',
@@ -1999,55 +1997,35 @@ function updateSyncBadge(online) {
   b.className = 'sync-badge ' + (online ? 'online' : 'offline');
 }
 
-// Firestore sync (IDハッシュ・チャンク分割方式)
-// 1ドキュメント1MB上限を回避するため、カードIDのハッシュ値で固定チャンクに振り分けて保存する。
-// インデックスベース(先頭から150件ずつ)と違い、1件の追加・削除があっても
-// 影響を受けるのは「そのカードが属するチャンク1個」だけで済むため、差分書き込みが可能。
-const CHUNK_COUNT = 64; // 固定値（運用中に変更しない。変更すると全カードの所属チャンクが組み替わるため）
-let lastSyncedItems = []; // 直前に同期した時点のitemsスナップショット（差分計算用）
-let lastSyncedAt = 0; // 自分が最後に書き込んだ（または取り込んだ）updatedAt。これより古い通知は無視する。
+// Firestore sync (5チャンク分割方式)
+// 1ドキュメント1MB上限を回避するため、カードを5つのチャンクドキュメントに均等分割して保存する。
+// オリジナルのロジック（isSyncingによる自己エコー防止、onSnapshotでの自動反映）はそのまま踏襲し、
+// 保存先だけを「1ドキュメント」から「5ドキュメント」に変更している。
+const CHUNK_COUNT = 5;
 
-function hashStr(str) {
-  // 撹拌力の強い文字列ハッシュ。Date.now()ベースの連番ID（カード生成時のID形式）でも
-  // チャンクへの分散が偏らないよう、final mixステップを入れている。
-  str = String(str || '');
-  let h = 1779033703 ^ str.length;
-  for (let i = 0; i < str.length; i++) {
-    h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
-    h = (h << 13) | (h >>> 19);
-  }
-  h = Math.imul(h ^ (h >>> 16), 2246822507);
-  h = Math.imul(h ^ (h >>> 13), 3266489909);
-  h ^= h >>> 16;
-  return h >>> 0;
-}
-
-function chunkIndexForId(id) {
-  return hashStr(id) % CHUNK_COUNT;
-}
-
-function groupItemsByChunk(allItems) {
-  // chunkIndex -> items[] のマップを作る（0〜CHUNK_COUNT-1全てキーを持つ）
-  const groups = Array.from({ length: CHUNK_COUNT }, () => []);
-  allItems.forEach(it => {
-    const idx = chunkIndexForId(it.id);
-    groups[idx].push(it);
-  });
+function splitIntoChunks(allItems, n) {
+  const groups = Array.from({ length: n }, () => []);
+  allItems.forEach((it, i) => { groups[i % n].push(it); });
   return groups;
 }
 
 function startFirestoreSync(uid) {
   if (firestoreUnsubscribe) firestoreUnsubscribe();
-  const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
   const legacyRef = db.collection('users').doc(uid).collection('data').doc('items');
+  const chunksCol = db.collection('users').doc(uid).collection('chunks');
 
-  metaRef.get().then(metaSnap => {
-    if (metaSnap.exists && metaSnap.data().scheme === 'idhash') {
-      // 既にIDハッシュ形式 → 通常どおり購読開始
+  const chunkRefs = [];
+  for (let i = 0; i < CHUNK_COUNT; i++) chunkRefs.push(chunksCol.doc('chunk_' + i));
+
+  // 既存のチャンクがあるか確認
+  Promise.all(chunkRefs.map(r => r.get())).then(snaps => {
+    const anyChunkExists = snaps.some(s => s.exists);
+    if (anyChunkExists) {
+      // 既にチャンク形式 → そのまま購読開始（最新を読み込む）
       attachFirestoreListener(uid);
       return;
     }
-    // メタが無い、または旧方式(インデックスチャンク or 単一items) → 移行処理
+    // チャンクが無い場合: 旧形式(items 1ドキュメント)からの移行、または初回push
     legacyRef.get().then(legacySnap => {
       if (legacySnap.exists && legacySnap.data() && Array.isArray(legacySnap.data().items)) {
         const legacyItems = legacySnap.data().items;
@@ -2056,21 +2034,6 @@ function startFirestoreSync(uid) {
           localStorage.setItem('remindo_items', JSON.stringify(items));
         }
         writeAllChunks(uid, items).then(() => attachFirestoreListener(uid));
-      } else if (metaSnap.exists && metaSnap.data().chunkCount) {
-        // 旧・インデックスチャンク方式からの移行: 旧chunk_*を全部読み込んでマージしてから作り直す
-        const oldCount = metaSnap.data().chunkCount;
-        const chunksCol = db.collection('users').doc(uid).collection('chunks');
-        const reads = [];
-        for (let i = 0; i < oldCount; i++) reads.push(chunksCol.doc('chunk_' + i).get());
-        Promise.all(reads).then(snaps => {
-          let merged = [];
-          snaps.forEach(s => { if (s.exists && Array.isArray(s.data().items)) merged = merged.concat(s.data().items); });
-          if (items.length === 0 || merged.length >= items.length) {
-            items = merged;
-            localStorage.setItem('remindo_items', JSON.stringify(items));
-          }
-          writeAllChunks(uid, items).then(() => attachFirestoreListener(uid));
-        }).catch(() => attachFirestoreListener(uid));
       } else if (items.length > 0) {
         writeAllChunks(uid, items).then(() => attachFirestoreListener(uid));
       } else {
@@ -2078,27 +2041,21 @@ function startFirestoreSync(uid) {
       }
     }).catch(() => attachFirestoreListener(uid));
   }).catch(err => {
-    console.error('Firestore meta取得エラー:', err);
-    updateSyncBadge(false);
+    console.error('Firestoreチャンク確認エラー:', err);
+    attachFirestoreListener(uid);
   });
 }
 
 function attachFirestoreListener(uid) {
-  const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
   if (firestoreUnsubscribe) firestoreUnsubscribe();
-  firestoreUnsubscribe = metaRef.onSnapshot({ includeMetadataChanges: true }, snap => {
+  const chunksCol = db.collection('users').doc(uid).collection('chunks');
+  // chunk_0 の更新だけを監視する「代表」とする。書き込みは必ず全チャンク同時に行うため、
+  // chunk_0 が更新された＝他チャンクも更新済み、とみなせる。
+  firestoreUnsubscribe = chunksCol.doc('chunk_0').onSnapshot(snap => {
     if (!snap.exists) { updateSyncBadge(true); return; }
-    // 自分自身の書き込みによる通知（まだサーバー確定前のローカルエコー、
-    // または自分が直前に書いたものと同じ更新時刻）は無視する。
-    if (snap.metadata.hasPendingWrites) { updateSyncBadge(true); return; }
-    const meta = snap.data();
-    if (!meta) { updateSyncBadge(true); return; }
-    if (meta.updatedAt && meta.updatedAt <= lastSyncedAt) { updateSyncBadge(true); return; }
     if (isSyncing) { updateSyncBadge(true); return; }
-    // ここまで来た通知だけが「他端末からの確定済みの更新」とみなせる。
-    const chunksCol = db.collection('users').doc(uid).collection('chunks');
     const reads = [];
-    for (let i = 0; i < CHUNK_COUNT; i++) reads.push(chunksCol.doc('chunk_' + i).get({ source: 'server' }));
+    for (let i = 0; i < CHUNK_COUNT; i++) reads.push(chunksCol.doc('chunk_' + i).get());
     Promise.all(reads).then(snaps => {
       let merged = [];
       for (const s of snaps) {
@@ -2106,8 +2063,6 @@ function attachFirestoreListener(uid) {
       }
       items = merged;
       localStorage.setItem('remindo_items', JSON.stringify(items));
-      lastSyncedItems = items.slice();
-      lastSyncedAt = meta.updatedAt || Date.now();
       const ap = document.querySelector('.page.active');
       if (ap) renderPage(ap.id.replace('page-', ''));
       updateBadges();
@@ -2122,82 +2077,27 @@ function attachFirestoreListener(uid) {
   });
 }
 
-// 全チャンクを書き直す（初回移行・全件再同期用）
 function writeAllChunks(uid, allItems) {
   isSyncing = true;
-  const groups = groupItemsByChunk(allItems);
+  const groups = splitIntoChunks(allItems, CHUNK_COUNT);
   const chunksCol = db.collection('users').doc(uid).collection('chunks');
-  const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
-  const writeTime = Date.now();
-  const writes = groups.map((chunk, i) => chunksCol.doc('chunk_' + i).set({ items: chunk }));
-  return Promise.all(writes).then(() =>
-    metaRef.set({ scheme: 'idhash', chunkCount: CHUNK_COUNT, totalItems: allItems.length, updatedAt: writeTime })
-  ).then(() => {
+  const writes = groups.map((chunk, i) =>
+    chunksCol.doc('chunk_' + i).set({ items: chunk, updatedAt: Date.now() })
+  );
+  return Promise.all(writes).then(() => {
     isSyncing = false;
-    lastSyncedItems = allItems.slice();
-    lastSyncedAt = writeTime;
     updateSyncBadge(true);
   }).catch(err => {
     isSyncing = false;
-    console.error('Firestore全件書き込みエラー:', err);
+    console.error('Firestore書き込みエラー:', err);
     updateSyncBadge(false);
     showSyncError(err);
-    throw err;
-  });
-}
-
-// 変更があったチャンクだけを書き直す（通常の保存はこちらを使う）
-function saveChangedChunks(uid, prevItems, newItems) {
-  const prevById = new Map(prevItems.map(it => [it.id, it]));
-  const newById = new Map(newItems.map(it => [it.id, it]));
-  const affectedChunks = new Set();
-
-  // 削除・変更されたカード（旧側基準）
-  prevById.forEach((it, id) => {
-    if (!newById.has(id) || JSON.stringify(newById.get(id)) !== JSON.stringify(it)) {
-      affectedChunks.add(chunkIndexForId(id));
-    }
-  });
-  // 追加されたカード（新側基準）
-  newById.forEach((it, id) => {
-    if (!prevById.has(id)) affectedChunks.add(chunkIndexForId(id));
-  });
-
-  if (affectedChunks.size === 0) {
-    lastSyncedItems = newItems.slice();
-    return Promise.resolve();
-  }
-
-  isSyncing = true;
-  const groups = groupItemsByChunk(newItems);
-  const chunksCol = db.collection('users').doc(uid).collection('chunks');
-  const metaRef = db.collection('users').doc(uid).collection('data').doc('meta');
-  const writeTime = Date.now();
-  const writes = [...affectedChunks].map(idx => chunksCol.doc('chunk_' + idx).set({ items: groups[idx] }));
-
-  return Promise.all(writes).then(() =>
-    metaRef.set({ scheme: 'idhash', chunkCount: CHUNK_COUNT, totalItems: newItems.length, updatedAt: writeTime }, { merge: true })
-  ).then(() => {
-    isSyncing = false;
-    lastSyncedItems = newItems.slice();
-    lastSyncedAt = writeTime;
-    updateSyncBadge(true);
-  }).catch(err => {
-    isSyncing = false;
-    console.error('Firestore差分書き込みエラー:', err);
-    updateSyncBadge(false);
-    showSyncError(err);
-    throw err;
   });
 }
 
 function saveToFirestore() {
   if (!currentUser) return;
-  const prev = lastSyncedItems;
-  const next = items.slice();
-  saveChangedChunks(currentUser.uid, prev, next).catch(() => {
-    // エラーは内部でログ・表示済み。ローカル保存は既に完了しているのでデータ自体は安全。
-  });
+  writeAllChunks(currentUser.uid, items);
 }
 
 function showSyncError(err) {
