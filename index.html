@@ -2004,8 +2004,10 @@ function updateSyncBadge(online) {
 const CHUNK_COUNT = 5;
 
 function splitIntoChunks(allItems, n) {
-  const groups = Array.from({ length: n }, () => []);
-  allItems.forEach((it, i) => { groups[i % n].push(it); });
+  // 先頭から連続した塊に分割する（交互振り分けだと読み込み時に順番が崩れるため）
+  const size = Math.ceil(allItems.length / n);
+  const groups = [];
+  for (let i = 0; i < n; i++) groups.push(allItems.slice(i * size, (i + 1) * size));
   return groups;
 }
 
