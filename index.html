@@ -563,8 +563,20 @@ function undoAction(){
 }
 
 function save(){localStorage.setItem('remindo_items',JSON.stringify(items));}
-function todayStr(){return new Date().toISOString().slice(0,10);}
-function daysDiff(ds){const d=new Date(ds),n=new Date();d.setHours(0,0,0,0);n.setHours(0,0,0,0);return Math.floor((n-d)/86400000);}
+// 「今日」の基準日を返す。午前4時未満は前日扱い（日本時間ベース）
+function getEffectiveDate(){
+  const now=new Date();
+  const jst=new Date(now.getTime()+9*60*60*1000); // UTC→JST
+  if(jst.getUTCHours()<4) jst.setUTCDate(jst.getUTCDate()-1); // 4時未満は前日
+  return jst.toISOString().slice(0,10);
+}
+function todayStr(){return getEffectiveDate();}
+function daysDiff(ds){
+  const d=new Date(ds+'T00:00:00+09:00'); // 比較対象はJST 0時扱い
+  const nStr=getEffectiveDate();
+  const n=new Date(nStr+'T00:00:00+09:00');
+  return Math.floor((n-d)/86400000);
+}
 // 日付文字列を YYYY-MM-DD 形式に正規化する
 // 対応: 'YYYY/M/D', 'YYYY/MM/DD', シングルクォートプレフィックス, ハイフン区切りの月日ゼロ埋めなし
 function normalizeDateStr(s){
