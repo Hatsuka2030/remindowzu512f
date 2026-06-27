@@ -457,7 +457,10 @@ let undoTimer=null;
 const streak=JSON.parse(localStorage.getItem('remindo_streak')||'{}');
 function saveStreak(){localStorage.setItem('remindo_streak',JSON.stringify(streak));}
 
-// ===== IndexedDB for images =====
+// ===== Image storage: dataURL embedded in items (Firestore sync対応) =====
+// img_front / img_back は dataURL の配列として保持する
+// 後方互換: 'img_' で始まる文字列 = 旧IDBキー → IDBから読み込む
+
 let idb=null;
 function openIDB(){
   return new Promise((res,rej)=>{
@@ -468,30 +471,54 @@ function openIDB(){
     req.onerror=e=>rej(e);
   });
 }
-async function saveImg(key,dataUrl){
-  const db=await openIDB();
-  return new Promise((res,rej)=>{
-    const tx=db.transaction('imgs','readwrite');
-    tx.objectStore('imgs').put({key,dataUrl});
-    tx.oncomplete=()=>res();tx.onerror=e=>rej(e);
-  });
-}
-async function getImg(key){
-  if(!key)return null;
+// 旧IDBから読み出す（後方互換用）
+async function getImgFromIDB(key){
   try{
     const db=await openIDB();
-    return await new Promise((res)=>{
+    return await new Promise(res=>{
       const req=db.transaction('imgs','readonly').objectStore('imgs').get(key);
       req.onsuccess=()=>res(req.result?req.result.dataUrl:null);
       req.onerror=()=>res(null);
     });
   }catch(e){return null;}
 }
+// キーかdataURLかを解決して返す（後方互換）
+async function resolveImgSrc(val){
+  if(!val)return null;
+  if(val.startsWith('data:'))return val; // 新方式: dataURLそのまま
+  if(val.startsWith('img_'))return await getImgFromIDB(val); // 旧方式: IDBキー
+  return null;
+}
+// 画像をCanvas経由でリサイズ+圧縮してdataURLを返す
+function compressImg(dataUrl){
+  return new Promise(res=>{
+    const img=new Image();
+    img.onload=()=>{
+      const MAX=600;
+      let w=img.width,h=img.height;
+      if(w>MAX||h>MAX){
+        if(w>h){h=Math.round(h*MAX/w);w=MAX;}
+        else{w=Math.round(w*MAX/h);h=MAX;}
+      }
+      const canvas=document.createElement('canvas');
+      canvas.width=w;canvas.height=h;
+      canvas.getContext('2d').drawImage(img,0,0,w,h);
+      res(canvas.toDataURL('image/jpeg',0.7));
+    };
+    img.onerror=()=>res(dataUrl); // 失敗時はそのまま
+    img.src=dataUrl;
+  });
+}
+// 旧IDB削除（後方互換: 旧キーのみ対象）
 async function deleteImgs(keys){
   if(!keys||!keys.length)return;
-  const db=await openIDB();
-  const tx=db.transaction('imgs','readwrite');
-  keys.forEach(k=>tx.objectStore('imgs').delete(k));
+  const oldKeys=keys.filter(k=>k&&k.startsWith('img_'));
+  if(!oldKeys.length)return;
+  try{
+    const db=await openIDB();
+    const tx=db.transaction('imgs','readwrite');
+    oldKeys.forEach(k=>tx.objectStore('imgs').delete(k));
+  }catch(e){}
 }
 
 // Pending images during modal edit session
@@ -501,9 +528,9 @@ function handleImgSelect(side,event){
   const files=[...event.target.files];
   files.forEach(file=>{
     const reader=new FileReader();
-    reader.onload=e=>{
-      const key='img_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-      pendingImgs[side].push({key,dataUrl:e.target.result});
+    reader.onload=async e=>{
+      const compressed=await compressImg(e.target.result);
+      pendingImgs[side].push({dataUrl:compressed});
       renderImgPreview(side);
     };
     reader.readAsDataURL(file);
@@ -525,23 +552,23 @@ function removePreviewImg(side,idx){
 }
 async function loadImgPreviews(item){
   for(const side of['front','back']){
-    const keys=item['img_'+side]||[];
+    const vals=item['img_'+side]||[];
     pendingImgs[side]=[];
-    for(const k of keys){
-      const dataUrl=await getImg(k);
-      if(dataUrl)pendingImgs[side].push({key:k,dataUrl});
+    for(const v of vals){
+      const dataUrl=await resolveImgSrc(v);
+      if(dataUrl)pendingImgs[side].push({dataUrl});
     }
     renderImgPreview(side);
   }
 }
 
 // Render images inline in cards/flip
-async function renderItemImages(el,keys){
-  if(!keys||!keys.length)return;
+async function renderItemImages(el,vals){
+  if(!vals||!vals.length)return;
   const wrap=document.createElement('div');
   wrap.className='flip-img-row';
-  for(const k of keys){
-    const dataUrl=await getImg(k);
+  for(const v of vals){
+    const dataUrl=await resolveImgSrc(v);
     if(dataUrl){const img=document.createElement('img');img.className='flip-img';img.src=dataUrl;img.onclick=()=>openLightbox(dataUrl);wrap.appendChild(img);}
   }
   el.appendChild(wrap);
@@ -596,9 +623,9 @@ function initPinchZoom(img){
 }
 
 // ===== Paste image =====
-function addImgFromDataUrl(side, dataUrl){
-  const key='img_'+Date.now()+'_'+Math.random().toString(36).slice(2);
-  pendingImgs[side].push({key,dataUrl});
+async function addImgFromDataUrl(side, dataUrl){
+  const compressed=await compressImg(dataUrl);
+  pendingImgs[side].push({dataUrl:compressed});
   renderImgPreview(side);
 }
 document.addEventListener('paste',function(e){
@@ -1626,9 +1653,9 @@ async function saveItem(){
   const tag=document.getElementById('input-tag').value.split(',').map(t=>t.trim()).filter(Boolean).join(', ');
   if(!front){document.getElementById('input-front').style.borderColor='var(--accent2)';document.getElementById('input-front').focus();return;}
   document.getElementById('input-front').style.borderColor='';
-  const imgFrontKeys=[];const imgBackKeys=[];
-  for(const img of pendingImgs.front){await saveImg(img.key,img.dataUrl);imgFrontKeys.push(img.key);}
-  for(const img of pendingImgs.back){await saveImg(img.key,img.dataUrl);imgBackKeys.push(img.key);}
+  // 画像はdataURLを圧縮済みで直接配列に格納（Firestore同期対応）
+  const imgFrontKeys=await Promise.all(pendingImgs.front.map(img=>compressImg(img.dataUrl)));
+  const imgBackKeys=await Promise.all(pendingImgs.back.map(img=>compressImg(img.dataUrl)));
   if(editingId){
     pushUndo('編集を取り消し',[...items]);
     const item=items.find(i=>i.id===editingId);
